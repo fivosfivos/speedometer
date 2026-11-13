@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>GPS Speedometer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Digital+7&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #000;
+      --fg: #fff;
+      --fg-dim: #666;
+    }
+
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #fff;
+        --fg: #000;
+        --fg-dim: #999;
+      }
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body { height: 100%; }
+
+    body {
+      font-family: 'Digital 7', monospace;
+      background: var(--bg);
+      color: var(--fg);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .speed-value {
+      font-size: clamp(110px, 32vw, 220px);
+      line-height: 1;
+      font-weight: 400;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: -3px;
+      user-select: none;
+    }
+
+    .speed-value:empty::before { content: "000"; }
+
+    .unit-toggle {
+      font-family: 'Digital 7', monospace;
+      font-size: clamp(22px, 4vw, 32px);
+      font-weight: 400;
+      color: var(--fg);
+      background: transparent;
+      border: none;
+      padding: 0;
+      cursor: pointer;
+      user-select: none;
+      opacity: 0.6;
+      transition: opacity 0.08s;
+    }
+
+    .unit-toggle:hover,
+    .unit-toggle:active { opacity: 1; }
+
+    .unit-toggle:focus-visible {
+      outline: 2px solid var(--fg);
+      outline-offset: 4px;
+    }
+
+    .top-speed {
+      display: flex;
+      align-items: baseline;
+      gap: 12px;
+      margin-top: 8px;
+    }
+
+    .top-speed-value {
+      font-family: 'Digital 7', monospace;
+      font-size: clamp(28px, 6vw, 44px);
+      font-weight: 400;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: -2px;
+      user-select: none;
+    }
+
+    .top-speed-time {
+      font-family: 'Digital 7', monospace;
+      font-size: clamp(16px, 3vw, 22px);
+      font-weight: 400;
+      color: var(--fg-dim);
+      user-select: none;
+    }
+
+    .status {
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-family: 'Digital 7', monospace;
+      font-size: 14px;
+      color: var(--fg-dim);
+      opacity: 0;
+      transition: opacity 0.2s;
+      pointer-events: none;
+    }
+
+    .status.visible { opacity: 1; }
+
+    @media (prefers-reduced-motion: reduce) {
+      .unit-toggle { transition: none; }
+      .status { transition: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="speed-value" id="speedValue" aria-live="polite" aria-label="Current speed"></div>
+  <div class="top-speed" id="topSpeed" style="display: none;">
+    <div class="top-speed-value" id="topSpeedValue"></div>
+    <div class="top-speed-time" id="topSpeedTime"></div>
+  </div>
+  <button class="unit-toggle" id="unitToggle" aria-label="Switch between km/h and mph" tabindex="0">km/h</button>
+  <div class="status" id="status" aria-live="assertive" role="alert"></div>
+
+  <script>
+    const MS_TO_KMH = 3.6;
+    const MS_TO_MPH = 2.23694;
+
+    let state = {
+      unit: 'kmh',
+      currentSpeed: 0,
+      topSpeed: 0,
+      topSpeedTime: null,
+      gpsWatchId: null
+    };
+
+    const speedValue = document.getElementById('speedValue');
+    const topSpeed = document.getElementById('topSpeed');
+    const topSpeedValue = document.getElementById('topSpeedValue');
+    const topSpeedTime = document.getElementById('topSpeedTime');
+    const unitToggle = document.getElementById('unitToggle');
+    const status = document.getElementById('status');
+
+    function formatSpeed(ms, unit) {
+      return Math.round(unit === 'mph' ? ms * MS_TO_MPH : ms * MS_TO_KMH);
+    }
+
+    function formatTime(date) {
+      return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+    }
+
+    function showStatus(msg, duration = 3000) {
+      status.textContent = msg;
+      status.classList.add('visible');
+      clearTimeout(status._t);
+      status._t = setTimeout(() => status.classList.remove('visible'), duration);
+    }
+
+    function updateDisplay() {
+      speedValue.textContent = formatSpeed(state.currentSpeed, state.unit).toString().padStart(3, '0');
+
+      if (state.topSpeed > 0) {
+        topSpeedValue.textContent = formatSpeed(state.topSpeed, state.unit).toString().padStart(3, '0');
+        topSpeedTime.textContent = formatTime(state.topSpeedTime);
+        topSpeed.style.display = 'flex';
+      } else {
+        topSpeed.style.display = 'none';
+      }
+    }
+
+    function toggleUnit() {
+      state.unit = state.unit === 'kmh' ? 'mph' : 'kmh';
+      unitToggle.textContent = state.unit === 'kmh' ? 'km/h' : 'mph';
+      updateDisplay();
+      showStatus(`Switched to ${state.unit === 'kmh' ? 'km/h' : 'mph'}`);
+    }
+
+    function startGPS() {
+      if (!navigator.geolocation) {
+        showStatus('Geolocation not supported');
+        return;
+      }
+
+      state.gpsWatchId = navigator.geolocation.watchPosition(
+        (pos) => {
+          const s = pos.coords.speed;
+          if (s !== null && s >= 0) {
+            state.currentSpeed = s;
+            updateDisplay();
+
+            if (s > state.topSpeed) {
+              state.topSpeed = s;
+              state.topSpeedTime = new Date();
+              updateDisplay();
+              showStatus('New top speed');
+            }
+          } else {
+            state.currentSpeed = 0;
+            updateDisplay();
+          }
+        },
+        (err) => {
+          if (err.code === err.PERMISSION_DENIED) {
+            showStatus('Location permission denied', 8000);
+          } else if (err.code === err.TIMEOUT) {
+            showStatus('GPS timeout', 4000);
+          } else {
+            showStatus('GPS unavailable', 5000);
+          }
+        },
+        { enableHighAccuracy: true, maximumAge: 1000, timeout: 10000 }
+      );
+    }
+
+    function stopGPS() {
+      if (state.gpsWatchId !== null) {
+        navigator.geolocation.clearWatch(state.gpsWatchId);
+        state.gpsWatchId = null;
+      }
+    }
+
+    unitToggle.addEventListener('click', toggleUnit);
+    unitToggle.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleUnit(); }
+    });
+
+    document.addEventListener('visibilitychange', () => {
+      document.hidden ? stopGPS() : startGPS();
+    });
+    window.addEventListener('beforeunload', stopGPS);
+
+    updateDisplay();
+    startGPS();
+  </script>
+</body>
+</html>
